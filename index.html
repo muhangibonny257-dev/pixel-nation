@@ -23,6 +23,7 @@
     image-rendering: pixelated; display: block;
     aspect-ratio: 1 / 1;
     box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    background: #2a1f14;
   }
   #news {
     background: #292524; border: 2px solid #57534e;
@@ -57,7 +58,7 @@
 
 <script>
 // === CONFIG ===
-const TILE = 24, MAP_W = 32, MAP_H = 32, TICK_MS = 100;
+const TILE = 28, MAP_W = 32, MAP_H = 32, TICK_MS = 100;
 
 // === WORLD MAP ===
 function generateMap() {
@@ -68,9 +69,9 @@ function generateMap() {
       const river = Math.sin(x * 0.3) + Math.cos(y * 0.4);
       let type = 'grass', resource;
       if (river > 1.4) type = 'water';
-      else if (Math.random() < 0.08) { type = 'tree'; resource = 10; }
-      else if (Math.random() < 0.03) { type = 'rock'; resource = 5; }
-      row.push({ type, resource });
+      else if (Math.random() < 0.10) { type = 'tree'; resource = 10; }
+      else if (Math.random() < 0.04) { type = 'rock'; resource = 5; }
+      row.push({ type, resource, noise: Math.random() });
     }
     map.push(row);
   }
@@ -106,11 +107,11 @@ function pushNews(type, message, severity) {
 }
 function renderNews() {
   document.getElementById('news-list').innerHTML = newsEvents.map(e =>
-    `<li class="news-item ${e.severity}"><span class="time">[${e.time}]</span> ${e.message}</li>`
+    '<li class="news-item ' + e.severity + '"><span class="time">[' + e.time + ']</span> ' + e.message + '</li>'
   ).join('');
 }
 
-// === UTILITY AI (the "brain") ===
+// === UTILITY AI ===
 function scoreActions(agent, world) {
   const actions = [];
   const { hunger, energy, social } = agent.needs;
@@ -155,7 +156,7 @@ function randomAdjacent(p) {
   };
 }
 
-// === SIMULATION TICK ===
+// === SIMULATION ===
 function updateAgent(a, world) {
   a.needs.hunger = Math.min(100, a.needs.hunger + 0.1);
   a.needs.energy = Math.min(100, a.needs.energy + 0.08);
@@ -215,16 +216,16 @@ function updateAgent(a, world) {
   }
 }
 
-// === DRAMA GENERATOR (upgrade to AI later) ===
+// === DRAMA ===
 const DRAMA_TEMPLATES = [
-  (a, b) => `${a.name} traded ${Math.ceil(Math.random()*5)} wood to ${b.name} for a shiny rock.`,
-  (a, b) => `${a.name} accused ${b.name} of stealing a fish. Tension rises.`,
-  (a, b) => `${a.name} and ${b.name} formed a secret alliance.`,
-  (a, b) => `${a.name} and ${b.name} argued loudly about the price of wood.`,
-  (a, b) => `${a.name} gave ${b.name} a warm hug. Moods up.`,
-  (a, b) => `${a.name} challenged ${b.name} to a staring contest.`,
-  (a, b) => `${a.name} whispered a rumor about ${b.name}.`,
-  (a, b) => `${a.name} shared food with ${b.name}. Kindness in the pixel wild.`,
+  (a, b) => a.name + ' traded ' + Math.ceil(Math.random()*5) + ' wood to ' + b.name + ' for a shiny rock.',
+  (a, b) => a.name + ' accused ' + b.name + ' of stealing a fish. Tension rises.',
+  (a, b) => a.name + ' and ' + b.name + ' formed a secret alliance.',
+  (a, b) => a.name + ' and ' + b.name + ' argued loudly about the price of wood.',
+  (a, b) => a.name + ' gave ' + b.name + ' a warm hug. Moods up.',
+  (a, b) => a.name + ' challenged ' + b.name + ' to a staring contest.',
+  (a, b) => a.name + ' whispered a rumor about ' + b.name + '.',
+  (a, b) => a.name + ' shared food with ' + b.name + '. Kindness in the pixel wild.',
 ];
 function generateDrama(a, b) {
   const tpl = DRAMA_TEMPLATES[Math.floor(Math.random() * DRAMA_TEMPLATES.length)];
@@ -237,38 +238,182 @@ const ctx = canvas.getContext('2d');
 canvas.width = MAP_W * TILE;
 canvas.height = MAP_H * TILE;
 
-const COLORS = {
-  grass: '#4a7c3a', water: '#2a5c8a', tree: '#1f4a1f',
-  rock: '#6b6b6b', house: '#a0602a', farm: '#b09040',
-};
 const EMOTES = {
   IDLE: '', WANDERING: '?', MOVING: '→', GATHERING: '⛏',
   BUILDING: '🔨', RESTING: '💤', SOCIALIZING: '💬',
 };
-function render(world) {
+
+// draw a single tile with pixel-art detail
+function drawTile(t, px, py, time) {
+  if (t.type === 'grass') {
+    ctx.fillStyle = '#4a7c3a';
+    ctx.fillRect(px, py, TILE, TILE);
+    // deterministic grass texture
+    const n = t.noise;
+    ctx.fillStyle = '#3d6630';
+    ctx.fillRect(px + 4 + n*14, py + 6 + n*10, 2, 2);
+    ctx.fillRect(px + 14 + n*6, py + 16 - n*4, 2, 2);
+    ctx.fillStyle = '#5a8c46';
+    ctx.fillRect(px + 8 + n*10, py + 20 - n*8, 2, 2);
+  } else if (t.type === 'water') {
+    ctx.fillStyle = '#2a5c8a';
+    ctx.fillRect(px, py, TILE, TILE);
+    // animated waves
+    ctx.strokeStyle = '#4a7caf';
+    ctx.lineWidth = 1.5;
+    const off = Math.sin(time * 0.002 + t.noise * 6) * 2;
+    ctx.beginPath();
+    ctx.moveTo(px + 4, py + 9 + off);
+    ctx.lineTo(px + 12, py + 9 + off);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px + 10, py + 19 - off);
+    ctx.lineTo(px + 22, py + 19 - off);
+    ctx.stroke();
+    // sparkle
+    ctx.fillStyle = '#a8d4f0';
+    ctx.fillRect(px + 16 + (t.noise*6), py + 4 + (t.noise*4), 1, 1);
+  } else if (t.type === 'tree') {
+    // grass base under the tree
+    ctx.fillStyle = '#4a7c3a';
+    ctx.fillRect(px, py, TILE, TILE);
+    // trunk
+    ctx.fillStyle = '#5a3a1a';
+    ctx.fillRect(px + TILE/2 - 2, py + TILE - 10, 4, 8);
+    ctx.fillStyle = '#3a2a0a';
+    ctx.fillRect(px + TILE/2 - 2, py + TILE - 4, 4, 2);
+    // shadow under foliage
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath();
+    ctx.ellipse(px + TILE/2, py + TILE - 8, 10, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+    // foliage layers
+    ctx.fillStyle = '#1f4a1f';
+    ctx.beginPath();
+    ctx.arc(px + TILE/2, py + TILE/2 - 2, 10, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#2d6b2d';
+    ctx.beginPath();
+    ctx.arc(px + TILE/2 - 3, py + TILE/2 - 5, 7, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#3d8a3d';
+    ctx.beginPath();
+    ctx.arc(px + TILE/2 - 4, py + TILE/2 - 7, 4, 0, Math.PI*2);
+    ctx.fill();
+    // resource indicator
+    if (t.resource <= 3) {
+      ctx.fillStyle = '#6a4a2a';
+      ctx.beginPath();
+      ctx.arc(px + TILE/2 + 5, py + TILE/2 + 3, 2, 0, Math.PI*2);
+      ctx.fill();
+    }
+  } else if (t.type === 'rock') {
+    // grass base
+    ctx.fillStyle = '#4a7c3a';
+    ctx.fillRect(px, py, TILE, TILE);
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.ellipse(px + TILE/2, py + TILE - 8, 9, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+    // rock body
+    ctx.fillStyle = '#6b6b6b';
+    ctx.beginPath();
+    ctx.moveTo(px + 6, py + TILE - 8);
+    ctx.lineTo(px + 8, py + 10);
+    ctx.lineTo(px + TILE/2 + 2, py + 6);
+    ctx.lineTo(px + TILE - 6, py + 12);
+    ctx.lineTo(px + TILE - 5, py + TILE - 8);
+    ctx.closePath();
+    ctx.fill();
+    // highlight
+    ctx.fillStyle = '#8a8a8a';
+    ctx.beginPath();
+    ctx.moveTo(px + 10, py + 12);
+    ctx.lineTo(px + TILE/2 + 1, py + 9);
+    ctx.lineTo(px + TILE/2 + 3, py + 15);
+    ctx.lineTo(px + 12, py + 18);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+// draw an agent as a little pixel person
+function drawAgent(a, time) {
+  const px = a.pos.x * TILE + TILE / 2;
+  const py = a.pos.y * TILE + TILE / 2;
+  const bob = Math.sin(time * 0.006 + a.pos.x + a.pos.y) * 1.5;
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(px, py + 10, 8, 3, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  const y = py + bob;
+
+  // legs
+  ctx.fillStyle = '#2a1a1a';
+  ctx.fillRect(px - 4, y + 4, 3, 6);
+  ctx.fillRect(px + 1, y + 4, 3, 6);
+
+  // body (shirt = agent color)
+  ctx.fillStyle = a.color;
+  ctx.fillRect(px - 5, y - 2, 10, 8);
+  // body shading
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(px + 3, y - 2, 2, 8);
+
+  // arms
+  ctx.fillStyle = '#e8b890';
+  ctx.fillRect(px - 7, y, 2, 5);
+  ctx.fillRect(px + 5, y, 2, 5);
+
+  // head (skin)
+  ctx.fillStyle = '#f0c8a0';
+  ctx.beginPath();
+  ctx.arc(px, y - 7, 4.5, 0, Math.PI*2);
+  ctx.fill();
+  // hair
+  ctx.fillStyle = a.color;
+  ctx.beginPath();
+  ctx.arc(px, y - 9, 4.5, Math.PI, Math.PI*2);
+  ctx.fill();
+
+  // eyes
+  ctx.fillStyle = '#000';
+  ctx.fillRect(px - 2, y - 7, 1, 1);
+  ctx.fillRect(px + 1, y - 7, 1, 1);
+
+  // name tag
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  const tw = ctx.measureText(a.name).width;
+  ctx.fillRect(px - tw/2 - 2, y - 22, tw + 4, 10);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(a.name, px, y - 14);
+
+  // emote
+  const emote = EMOTES[a.state];
+  if (emote) {
+    ctx.font = '11px monospace';
+    ctx.fillText(emote, px, y - 26);
+  }
+}
+
+function render(world, time) {
   ctx.fillStyle = '#2a1f14';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  // tiles
   for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
-    ctx.fillStyle = COLORS[world.map[y][x].type];
-    ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+    drawTile(world.map[y][x], x * TILE, y * TILE, time);
   }
 
-  ctx.font = '9px monospace';
-  ctx.textAlign = 'center';
-  for (const a of world.agents) {
-    if (!a.alive) continue;
-    const px = a.pos.x * TILE + TILE / 2;
-    const py = a.pos.y * TILE + TILE / 2;
-    const s = TILE * 0.66;
-    ctx.fillStyle = a.color;
-    ctx.fillRect(px - s/2, py - s/2, s, s);
-    ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
-    ctx.strokeRect(px - s/2, py - s/2, s, s);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(a.name, px, py - TILE / 2);
-    if (EMOTES[a.state]) ctx.fillText(EMOTES[a.state], px, py + TILE / 2 + 8);
-  }
+  // agents sorted by y (so lower agents draw in front)
+  const sorted = world.agents.filter(a => a.alive).sort((a, b) => a.pos.y - b.pos.y);
+  for (const a of sorted) drawAgent(a, time);
 }
 
 // === MAIN LOOP ===
@@ -285,7 +430,7 @@ function loop(t) {
     for (const a of world.agents) if (a.alive) updateAgent(a, world);
     lastTick = t;
   }
-  render(world);
+  render(world, t);
   requestAnimationFrame(loop);
 }
 
@@ -293,4 +438,4 @@ pushNews('discovery', 'A new civilization awakens...', 'low');
 requestAnimationFrame(loop);
 </script>
 </body>
-  </html>
+</html>
