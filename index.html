@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Nation</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Courier New', monospace;
+    background: #1c1917;
+    color: #f5f5f4;
+    min-height: 100vh;
+    padding: 12px;
+  }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 900px) { .grid { grid-template-columns: 1fr 340px; } }
+  canvas {
+    width: 100%; max-width: 768px;
+    border: 4px solid #292524; border-radius: 12px;
+    image-rendering: pixelated; display: block;
+    aspect-ratio: 1 / 1;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  #news {
+    background: #292524; border: 2px solid #57534e;
+    border-radius: 12px; padding: 12px;
+    max-height: 768px; overflow-y: auto;
+  }
+  #news h2 {
+    font-size: 12px; text-transform: uppercase;
+    letter-spacing: 2px; color: #a8a29e; margin: 0 0 8px;
+  }
+  #news ul { list-style: none; padding: 0; margin: 0; }
+  .news-item {
+    font-size: 12px; padding: 6px 8px;
+    border-left: 4px solid #57534e;
+    margin-bottom: 6px;
+  }
+  .news-item.low    { border-color: #57534e; color: #d6d3d1; }
+  .news-item.medium { border-color: #d97706; color: #fcd34d; }
+  .news-item.high   { border-color: #dc2626; color: #fca5a5; }
+  .time { opacity: 0.5; }
+</style>
+</head>
+<body>
+  <h1>🏙️ Pixel Nation</h1>
+  <div class="grid">
+    <canvas id="game"></canvas>
+    <aside id="news">
+      <h2>📡 World News</h2>
+      <ul id="news-list"></ul>
+    </aside>
+  </div>
+
+<script>
+// === CONFIG ===
+const TILE = 24, MAP_W = 32, MAP_H = 32, TICK_MS = 100;
+
+// === WORLD MAP ===
+function generateMap() {
+  const map = [];
+  for (let y = 0; y < MAP_H; y++) {
+    const row = [];
+    for (let x = 0; x < MAP_W; x++) {
+      const river = Math.sin(x * 0.3) + Math.cos(y * 0.4);
+      let type = 'grass', resource;
+      if (river > 1.4) type = 'water';
+      else if (Math.random() < 0.08) { type = 'tree'; resource = 10; }
+      else if (Math.random() < 0.03) { type = 'rock'; resource = 5; }
+      row.push({ type, resource });
+    }
+    map.push(row);
+  }
+  return map;
+}
+
+// === AGENTS ===
+const NAMES = ['Aria', 'Bob', 'Celes', 'Dax', 'Eve', 'Fenn', 'Gale', 'Hugo'];
+function createAgent(i) {
+  return {
+    id: 'agent-' + i,
+    name: NAMES[i % NAMES.length],
+    pos: { x: 4 + (i * 3) % MAP_W, y: 4 + Math.floor(i / 4) * 3 },
+    target: null, state: 'IDLE', stateTimer: 0,
+    needs: { hunger: 20, energy: 10, social: 15 },
+    inventory: { wood: 0, food: 2, gold: 5 },
+    traits: { aggression: Math.random(), sociability: Math.random(), industriousness: Math.random() },
+    color: 'hsl(' + (i * 45) + ', 70%, 55%)',
+    mood: 70, alive: true,
+  };
+}
+
+// === NEWS FEED ===
+const newsEvents = [];
+function pushNews(type, message, severity) {
+  newsEvents.unshift({
+    id: Math.random().toString(36).slice(2),
+    type, message, severity,
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  });
+  if (newsEvents.length > 100) newsEvents.pop();
+  renderNews();
+}
+function renderNews() {
+  document.getElementById('news-list').innerHTML = newsEvents.map(e =>
+    `<li class="news-item ${e.severity}"><span class="time">[${e.time}]</span> ${e.message}</li>`
+  ).join('');
+}
+
+// === UTILITY AI (the "brain") ===
+function scoreActions(agent, world) {
+  const actions = [];
+  const { hunger, energy, social } = agent.needs;
+  if (hunger > 60 && agent.inventory.food > 0) {
+    agent.inventory.food--;
+    agent.needs.hunger = Math.max(0, hunger - 60);
+    return { state: 'RESTING', score: 300 };
+  }
+  if (energy > 70) actions.push({ state: 'RESTING', score: 150 + energy });
+
+  const tree = findNearest(agent.pos, world.map, t => t.type === 'tree' && (t.resource || 0) > 0);
+  if (tree && agent.traits.industriousness > 0.3) {
+    actions.push({ state: 'GATHERING', target: tree, score: 80 + agent.traits.industriousness * 80 - energy });
+  }
+
+  const other = world.agents.find(o => o.id !== agent.id && o.alive);
+  if (other && social > 40) {
+    actions.push({ state: 'SOCIALIZING', target: other.id, score: 60 + agent.traits.sociability * 80 });
+  }
+
+  actions.push({ state: 'WANDERING', target: randomAdjacent(agent.pos), score: 10 });
+  actions.sort((a, b) => b.score - a.score);
+  return actions[0];
+}
+
+function findNearest(from, map, pred) {
+  let best = null, bestD = Infinity;
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    if (!pred(map[y][x])) continue;
+    const d = Math.abs(x - from.x) + Math.abs(y - from.y);
+    if (d < bestD) { bestD = d; best = { x, y }; }
+  }
+  return best;
+}
+
+function randomAdjacent(p) {
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+  const [dx, dy] = dirs[Math.floor(Math.random() * 4)];
+  return {
+    x: Math.max(0, Math.min(MAP_W - 1, p.x + dx * (1 + Math.floor(Math.random() * 4)))),
+    y: Math.max(0, Math.min(MAP_H - 1, p.y + dy * (1 + Math.floor(Math.random() * 4)))),
+  };
+}
+
+// === SIMULATION TICK ===
+function updateAgent(a, world) {
+  a.needs.hunger = Math.min(100, a.needs.hunger + 0.1);
+  a.needs.energy = Math.min(100, a.needs.energy + 0.08);
+  a.needs.social = Math.min(100, a.needs.social + 0.05);
+
+  switch (a.state) {
+    case 'IDLE': {
+      const best = scoreActions(a, world);
+      a.state = best.state;
+      a.target = best.target || null;
+      break;
+    }
+    case 'WANDERING':
+    case 'MOVING': {
+      if (a.target && typeof a.target === 'object') {
+        const dx = Math.sign(a.target.x - a.pos.x);
+        const dy = Math.sign(a.target.y - a.pos.y);
+        a.pos = { x: a.pos.x + dx, y: a.pos.y + dy };
+        if (a.pos.x === a.target.x && a.pos.y === a.target.y) {
+          a.state = 'IDLE'; a.target = null;
+        }
+      } else a.state = 'IDLE';
+      break;
+    }
+    case 'GATHERING': {
+      if (++a.stateTimer >= 30) {
+        const t = world.map[a.pos.y] && world.map[a.pos.y][a.pos.x];
+        if (t && t.type === 'tree' && (t.resource || 0) > 0) {
+          a.inventory.wood++; t.resource--;
+        }
+        a.state = 'IDLE'; a.stateTimer = 0;
+      }
+      break;
+    }
+    case 'RESTING': {
+      a.needs.energy = Math.max(0, a.needs.energy - 0.6);
+      if (++a.stateTimer >= 100) { a.state = 'IDLE'; a.stateTimer = 0; }
+      break;
+    }
+    case 'SOCIALIZING': {
+      a.needs.social = Math.max(0, a.needs.social - 0.6);
+      if (++a.stateTimer >= 40) {
+        if (Math.random() < 0.25) {
+          const other = world.agents.find(o => o.id === a.target);
+          if (other) generateDrama(a, other);
+        }
+        a.state = 'IDLE'; a.stateTimer = 0;
+      }
+      break;
+    }
+  }
+
+  a.mood = Math.round(100 - (a.needs.hunger + a.needs.energy + a.needs.social) / 3);
+  if (a.needs.hunger >= 100) {
+    a.alive = false;
+    pushNews('death', a.name + ' starved to death.', 'high');
+  }
+}
+
+// === DRAMA GENERATOR (upgrade to AI later) ===
+const DRAMA_TEMPLATES = [
+  (a, b) => `${a.name} traded ${Math.ceil(Math.random()*5)} wood to ${b.name} for a shiny rock.`,
+  (a, b) => `${a.name} accused ${b.name} of stealing a fish. Tension rises.`,
+  (a, b) => `${a.name} and ${b.name} formed a secret alliance.`,
+  (a, b) => `${a.name} and ${b.name} argued loudly about the price of wood.`,
+  (a, b) => `${a.name} gave ${b.name} a warm hug. Moods up.`,
+  (a, b) => `${a.name} challenged ${b.name} to a staring contest.`,
+  (a, b) => `${a.name} whispered a rumor about ${b.name}.`,
+  (a, b) => `${a.name} shared food with ${b.name}. Kindness in the pixel wild.`,
+];
+function generateDrama(a, b) {
+  const tpl = DRAMA_TEMPLATES[Math.floor(Math.random() * DRAMA_TEMPLATES.length)];
+  pushNews('chat', tpl(a, b), 'medium');
+}
+
+// === RENDER ===
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = MAP_W * TILE;
+canvas.height = MAP_H * TILE;
+
+const COLORS = {
+  grass: '#4a7c3a', water: '#2a5c8a', tree: '#1f4a1f',
+  rock: '#6b6b6b', house: '#a0602a', farm: '#b09040',
+};
+const EMOTES = {
+  IDLE: '', WANDERING: '?', MOVING: '→', GATHERING: '⛏',
+  BUILDING: '🔨', RESTING: '💤', SOCIALIZING: '💬',
+};
+function render(world) {
+  ctx.fillStyle = '#2a1f14';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) {
+    ctx.fillStyle = COLORS[world.map[y][x].type];
+    ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+  }
+
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  for (const a of world.agents) {
+    if (!a.alive) continue;
+    const px = a.pos.x * TILE + TILE / 2;
+    const py = a.pos.y * TILE + TILE / 2;
+    const s = TILE * 0.66;
+    ctx.fillStyle = a.color;
+    ctx.fillRect(px - s/2, py - s/2, s, s);
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+    ctx.strokeRect(px - s/2, py - s/2, s, s);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(a.name, px, py - TILE / 2);
+    if (EMOTES[a.state]) ctx.fillText(EMOTES[a.state], px, py + TILE / 2 + 8);
+  }
+}
+
+// === MAIN LOOP ===
+const world = {
+  tick: 0,
+  map: generateMap(),
+  agents: Array.from({ length: 6 }, (_, i) => createAgent(i)),
+};
+
+let lastTick = 0;
+function loop(t) {
+  if (t - lastTick >= TICK_MS) {
+    world.tick++;
+    for (const a of world.agents) if (a.alive) updateAgent(a, world);
+    lastTick = t;
+  }
+  render(world);
+  requestAnimationFrame(loop);
+}
+
+pushNews('discovery', 'A new civilization awakens...', 'low');
+requestAnimationFrame(loop);
+</script>
+</body>
+  </html>
